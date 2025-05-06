@@ -1,0 +1,151 @@
+---
+title: "NCAA Graduation Success Rate Report"
+author: "Joy Lindsay"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Libraries
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(utHelpR)
+library(here)
+#library(IPEDSuploadables)
+library(scales)
+```
+
+### Pull data from Edify using sql and filter on variables defined above.
+
+```{r}
+graduation_rate_raw <- utHelpR::get_data_from_sql_file('graduation_rate.sql', 'edify', 'project')
+
+headcount_census_groups_raw <- utHelpR::get_data_from_sql_file('headcount_census_groups.sql', 'edify', 'project')
+
+twelve_month_hc_raw <- utHelpR::get_data_from_sql_file('twelve_month_hc.sql', 'edify', 'project')
+```
+
+### Define Variables
+
+#### Variable Definitions:
+
+-   **v_unit_id** - Unit ID of the institution.
+-   **v_cohort_start_term_id** - The start term of the cohort.
+-   **v_cohort_description** - The cohort description *i.e (First-Time Freshman, Transfer)*.
+-   **v_full_time_part_time_code** - Full or part time cohort status.
+
+```{r echo=TRUE}
+# Declare Variables ####
+# Graduation Rates
+v_unit_id <- '230171'
+v_cohort_start_term_id <- '201840'
+v_cohort_description <- 'First-Time Freshman'
+v_full_time_part_time_code <- 'F'
+```
+
+### Graduation Rate Munge
+
+This data frame transforms the graduation rate data to match the criteria needed for calulating the IPEDS graduation rate.
+
+```{r echo=TRUE, warning=TRUE, message=TRUE}
+gr_munge_df <- graduation_rate_raw %>%
+  filter(cohort_start_term_id == v_cohort_start_term_id,
+         cohort_desc == v_cohort_description,
+         full_time_part_time_code == v_full_time_part_time_code) %>%
+  mutate(Unitid = v_unit_id,
+         EnteringProgramType = if_else(cohort_degree_level_code == 'BA', 3, 1),
+         CurrentProgramType = case_when(ipeds_award_level_code %in% c('1A', '1B') ~ 1,
+                                        ipeds_award_level_code %in% c('2', '3') ~ 2,
+                                        ipeds_award_level_code == '5' ~ 3
+                                        ),
+         Completed150 = if_else((( ipeds_award_level_code %in% c('1A', '1B') & days_to_graduate <= 365 ) |
+                                    # graduated with a mid credit hour cert within 1.5 years
+                                    ( ipeds_award_level_code == '2' & days_to_graduate <= 547 ) |
+                                    # graduated with associate within 3 years 
+                                    ( ipeds_award_level_code == '3' & days_to_graduate <= 1095 ) |
+                                    # graduated with bachelors within 6 years
+                                    ( ipeds_award_level_code == '5' & days_to_graduate <= 2190 )),1,0, missing = 0),
+         CompletedFourYears = if_else(ipeds_award_level_code == '5' & days_to_graduate <= 1460, 1, 0, missing = 0),
+         CompletedFiveYears = if_else(CompletedFourYears != 1 & ipeds_award_level_code == '5' & days_to_graduate <= 1825, 1, 0, missing = 0),
+         IsExclusion = if_else(Completed150 != 1  & is_exclusion, 1, 0),
+         transfer_out_calc = if_else((Completed150 == 1 | IsExclusion == 1), FALSE, is_transfer_out),
+         IsTransferOut = if_else(transfer_out_calc, 1, 0, missing =  0),
+         is_still_enrolled_calc = if_else((Completed150 == 1 | IsTransferOut == 1 | IsExclusion == 1), FALSE, is_enrolled),
+         IsStillEnrolled = if_else(is_still_enrolled_calc, 1, 0, missing =  0),
+         RaceEthnicity = case_when(
+           ipeds_race_ethnicity == 'Non-Resident Alien' ~ 1,
+           ipeds_race_ethnicity == 'Hispanic' ~ 2,
+           ipeds_race_ethnicity == 'American Indian/Alaskan' ~ 3,
+           ipeds_race_ethnicity == 'Asian' ~ 4,
+           ipeds_race_ethnicity == 'Black/African American' ~ 5,
+           ipeds_race_ethnicity == 'Hawaiian/Pacific Islander' ~ 6,
+           ipeds_race_ethnicity == 'White' ~ 7,
+           ipeds_race_ethnicity == 'Multiracial' ~ 8,
+           ipeds_race_ethnicity == 'Unspecified' ~ 9
+         ),
+         Sex = case_when(gender_code == 'M' ~ 1,
+                         gender_code == 'F' ~ 2),
+         GenderDetail = case_when(gender_code == 'M' ~ 1,
+                                  gender_code == 'F' ~ 2),
+         PellGrant = if_else(is_pell_awarded, 1, 0),
+         DirectLoan = if_else(is_pell_awarded != 1 & is_subsidized_loan_awarded, 1, 0),
+         IsAthlete = if_else(is_athlete, 1, 0),
+         IsVeteran = if_else(is_veteran, 1, 0)
+         )
+
+```
+
+
+Bachelor's or equivalent degree-seeking subcohort:
+
+First Time Full Time Bachelor Seeking Freshman:
+
+```{r}
+bach_seeking_cohort <- gr_munge_df %>% 
+  filter(cohort_degree_level_code == 'BA') %>% 
+  select(cohort_start_term_id, cohort_code_desc, ipeds_award_level_code, is_athlete, gender_code, is_graduated, ipeds_race_ethnicity)
+```
+
+Completers of bachelor's or equivalent degrees:
+
+```{r}
+bach_complete_rate <- bach_seeking_cohort %>%
+  mutate(is_graduated = if_else(is.na(is_graduated), FALSE, is_graduated)) %>% 
+  group_by(ipeds_award_level_code, is_athlete) %>% 
+  summarise(headcount = n()) 
+
+
+
+  
+```
+
+Demographics - Academic Year 2024-25 (Summer 24, Fall 24, Spring 25 Census)
+
+Full Time Undergraduate Baccalaureate Degree Seeking Students
+
+```{r}
+
+demographics_2425 <- twelve_month_hc_raw %>%
+  filter(term_id %in% c('202430', '202440', '202520'), 
+         is_degree_seeking == TRUE,
+         level_id == 'UG',
+         full_time_part_time_code == 'F',
+         str_starts(primary_degree_id, "B")) %>% 
+  select(student_id, is_degree_seeking, gender_code, full_time_part_time_code, level_id, primary_degree_id) %>%
+  distinct(student_id, .keep_all = TRUE) %>% 
+  group_by(gender_code) %>% 
+  summarise(count = n())
+
+
+
+
+
+
+
+
+```
+
