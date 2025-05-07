@@ -1,0 +1,140 @@
+---
+title: "NCAA GSR Parts 2 and 3"
+author: "Joy Lindsay"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(utHelpR)
+library(here)
+library(scales)
+library(readxl)
+library(janitor)
+library(knitr)
+```
+
+bringing in the sql from Edify
+
+```{r}
+ipeds_graduation_df <- utHelpR::get_data_from_sql_file('ipeds_graduation.sql', 'edify', 'project')
+```
+
+bringing in the Excel sheet given to us from Athletics - Note: the file needs to be named just like the file given if you rename the file you need to rename it here as well.
+
+```{r}
+gsr_2018_cohort_raw <- read_excel(here("sensitive", "GSR 2018 Cohort 2025.xlsx"))
+```
+
+Cleaning up the Excel file to make a cleaner data frame
+
+```{r}
+gsr_2018_cohort <- gsr_2018_cohort_raw %>% 
+  clean_names()
+```
+
+```{r}
+# Declare Variables ####
+v_cohort_start_term_id <- '201840'
+v_cohort_description <- 'First-Time Freshman'
+v_full_time_part_time_code <- 'F'
+```
+
+# Question 2
+
+```{r warning=FALSE}
+ncaa_grad_sum_df <- ipeds_graduation_df %>%
+  #filter(cohort_code == "FTFB201640") %>%  # we could just filter by the cohort code
+  filter(cohort_start_term_id == v_cohort_start_term_id,
+         cohort_desc == v_cohort_description,
+         full_time_part_time_code == v_full_time_part_time_code) %>%
+  mutate(count_entered = 1) %>% 
+  mutate(count_graduated = if_else(!is.na(graduation_date) & ipeds_award_level_code == 5, 1, 0)) %>%
+  mutate(count_exclusion = if_else(is_exclusion, 1, 0)) %>%
+  select(student_id,count_entered, is_athlete, count_graduated, count_exclusion, 
+         ipeds_race_ethnicity, gender_code, is_enrolled) %>% 
+  mutate(count_athlete = if_else(is_athlete, 1, 0)) %>% 
+  group_by(ipeds_race_ethnicity, gender_code) %>% 
+  summarise(across(.cols = starts_with("count"),  ~ sum(.x, na.rm = FALSE)))
+
+```
+
+## Function to make it look like the pdf
+
+```{r}
+sum_ncaa_grad <- function(input_df, gender_code){
+   gender_code <- rlang::enquo(gender_code) 
+  
+output_df <- input_df %>% 
+  filter(gender_code == {{gender_code}}) %>% 
+  mutate(RaceEthnicity = case_when(
+           ipeds_race_ethnicity == 'Non-Resident Alien' ~ 1,
+           ipeds_race_ethnicity == 'Hispanic' ~ 2,
+           ipeds_race_ethnicity == 'American Indian/Alaskan' ~ 3,
+           ipeds_race_ethnicity == 'Asian' ~ 4,
+           ipeds_race_ethnicity == 'Black/African American' ~ 5,
+           ipeds_race_ethnicity == 'Hawaiian/Pacific Islander' ~ 6,
+           ipeds_race_ethnicity == 'White' ~ 7,
+           ipeds_race_ethnicity == 'Multiracial' ~ 8,
+           ipeds_race_ethnicity == 'Unspecified' ~ 9 )) %>% 
+  arrange(RaceEthnicity) %>% 
+  select(-c(2, 6:7)) %>%
+  rename_with(~str_remove(., "count_"), everything()) %>% 
+  adorn_totals()
+
+return(output_df)
+}
+```
+
+Passing the data frame through the function to make two reports, one for Men and the other for Women.
+
+```{r}
+men <- sum_ncaa_grad(ncaa_grad_sum_df, "M")
+
+women <- sum_ncaa_grad(ncaa_grad_sum_df, "F")
+```
+
+Using Kable to clean it up a bit.
+
+```{r}
+kable((men), caption = "Men")
+
+kable((women), caption = "Women")
+```
+
+# Question 3
+
+```{r}
+ncaa_grad_df <- ipeds_graduation_df %>%
+  mutate(count_graduated = if_else(!is.na(graduation_date) & ipeds_award_level_code == 5, 1, 0)) %>%
+  mutate(count_exclusion = if_else(is_exclusion, 1, 0)) %>%
+  select(student_id, count_graduated, count_exclusion, ipeds_race_ethnicity, 
+         is_enrolled, cohort_start_term_id, cohort_desc, cohort_code)
+```
+
+## unfiltered
+
+```{r}
+gsr_2018_cohort_grad_rate_unfiltered <- gsr_2018_cohort %>% 
+  mutate(student_id = str_pad(student_id, side = "left", pad = "0", 8)) %>% 
+  left_join(ncaa_grad_df, by = c("student_id" = "student_id"))
+```
+
+## filtered by
+
+```{r}
+gsr_2018_cohort_grad_rate <- gsr_2018_cohort_grad_rate_unfiltered %>% 
+   filter(cohort_start_term_id == v_cohort_start_term_id,
+          cohort_desc == v_cohort_description)
+```
+
+This will make a new spreadsheet in the sensitive folder.
+
+```{r}
+write_csv(gsr_2018_cohort_grad_rate, here::here('sensitive', '2018_cohort_output.csv'))
+```

@@ -1,0 +1,162 @@
+---
+title: "NCAA GSR Part 1"
+author: "Joy Lindsay"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(utHelpR)
+library(here)
+library(scales)
+library(readxl)
+library(janitor)
+library(knitr)
+```
+
+# Full time degree seeking undergraduates Fall 24:
+```{r}
+all_student_data_sql <- get_data_from_sql_file('ft_ds_fall24.sql', 'edify', 'project')
+
+#This is data that Mo or Robb need for a separate NCAA report.
+all_athletes_sql <- get_data_from_sql_file('all_athletes.sql', 'edify', 'project')
+```
+
+```{r}
+
+men <- all_student_data_sql %>% 
+  select(gender_code, ipeds_race_ethnicity, count) %>% 
+  filter(gender_code == 'M')
+
+athletes_all <- all_athletes_sql %>% 
+  filter(is_athlete == 'TRUE')
+
+men_athletics <- all_athletes_sql %>% 
+  select(gender_code, ipeds_race_ethnicity) %>% 
+  filter(gender_code == 'M') %>% 
+  group_by(ipeds_race_ethnicity) %>% 
+  summarise(count = n()) %>% 
+  ungroup()
+
+women <- all_student_data_sql %>% 
+  select(gender_code, ipeds_race_ethnicity, count) %>% 
+  filter(gender_code == 'F')
+
+
+women_athletics <-all_athletes_sql %>% 
+  select(gender_code, ipeds_race_ethnicity) %>% 
+  filter(gender_code == 'F') %>% 
+  group_by(ipeds_race_ethnicity) %>% 
+  summarise(count = n()) %>% 
+  ungroup()
+
+```
+
+# Athletes w/financial aid Fall 24
+```{r}
+athlete_finaid_sql <- get_data_from_sql_file('athlete_finaid.sql', 'edify', 'project')
+```
+
+# pull Athletic Aid Fund Codes from Excel
+```{r}
+athletic_aid <- utHelpR::load_data_from_xlsx("athletic_fund_codes.xlsx") %>% 
+  mutate(financial_aid_fund_id=as.character(Fund))
+```
+
+## tidy student_fin_aid by adding is_athletic_aid indicator
+```{r}
+student_athletic_aid <-athlete_finaid_sql %>% 
+  left_join(athletic_aid, by =c("financial_aid_fund_id" = "financial_aid_fund_id")) %>% 
+  mutate(is_athletic_aid = case_when(
+    !is.na(Fund) ~ "Y",
+    TRUE ~ "N"
+  )) %>%
+  distinct(student_id)
+```
+
+```{r}
+clean_athl_aid <- student_athletic_aid %>%
+filter(is_athletic_aid == 'Y')
+```
+
+```{r}
+men_sport <- clean_athl_aid %>% 
+  filter(gender_code == 'M') %>% 
+  group_by(gender_code, activity_desc, ipeds_race_ethnicity) %>% 
+  summarise(count = n()) %>% 
+  ungroup()
+
+women_sport <- clean_athl_aid %>% 
+  filter(gender_code == 'F') %>% 
+  group_by(gender_code, activity_desc, ipeds_race_ethnicity) %>% 
+  summarise(count = n()) %>% 
+  ungroup()
+
+```
+
+Enrollment - Total student population at Fall census by gender, ethnicity and y/n is_athlete
+
+```{r}
+enrollment_census_raw <- get_data_from_sql_file('enrollment_census.sql', 'edify', 'project')
+```
+
+ethnicity
+```{r}
+ethnicity_all <- enrollment_census_raw %>% 
+  select(term_desc, ipeds_race_ethnicity) %>% 
+  group_by(ipeds_race_ethnicity) %>% 
+  summarise(count = n()) %>% 
+  ungroup()
+
+ethnicity_men <- enrollment_census_raw %>% 
+  filter(gender_code == 'M') %>% 
+  select(term_desc, ipeds_race_ethnicity, gender_code) %>% 
+  group_by(ipeds_race_ethnicity, gender_code) %>% 
+  summarise(count = n()) %>% 
+  ungroup()
+
+ethnicity_women <- enrollment_census_raw %>% 
+  filter(gender_code == 'F') %>% 
+  select(term_desc, ipeds_race_ethnicity, gender_code) %>% 
+  group_by(ipeds_race_ethnicity, gender_code) %>% 
+  summarise(count = n()) %>% 
+  ungroup()
+
+
+athletes_all <- enrollment_census_raw %>% 
+  filter(is_athlete == TRUE) %>% 
+  select(term_desc, ipeds_race_ethnicity, gender_code, is_athlete) %>% 
+  group_by(ipeds_race_ethnicity, gender_code) %>% 
+  summarise(count = n()) %>% 
+  ungroup()
+
+athletes_gender <- enrollment_census_raw %>% 
+   filter(is_athlete == TRUE) %>% 
+  select(term_desc, gender_code, is_athlete) %>% 
+  group_by(gender_code) %>% 
+  summarise(count = n()) %>% 
+  ungroup()
+
+athletes_ethnicity <- enrollment_census_raw %>% 
+  filter(is_athlete == TRUE) %>% 
+  select(term_desc, ipeds_race_ethnicity, is_athlete) %>% 
+  group_by(ipeds_race_ethnicity) %>% 
+  summarise(count = n()) %>% 
+  ungroup()
+
+
+
+```
+
+Bachelor Degree Seeking Fall Census by Sport
+```{r}
+
+bachelor_seeking_sport <- get_data_from_sql_file('bachelor_seeking_sport.sql', 'edify', 'project')
+
+```
+
